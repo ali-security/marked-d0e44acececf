@@ -1,16 +1,19 @@
 name: "Tests"
 on:
-  pull_request:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Optional jasmine selector appended to the test commands'
+        required: false
+        default: ''
 
 jobs:
   Test:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 30
     strategy:
       matrix:
-        node_version: ['lts/*', 'node']
+        node_version: ['lts/*', 'node', '14']
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -22,12 +25,19 @@ jobs:
       - name: Install Dependencies
         run: npm ci
       - name: Run Unit Tests 👩🏽‍💻
-        run: npm run test:unit
+        run: |
+          set -o pipefail
+          npm run test:unit ${{ inputs.test-filter }} | tee jasmine-unit.log
+          awk '/^[0-9]+ specs?, [0-9]+ failures?/ { t=$1; f=$3; p=0; if (match($0, /[0-9]+ pending/)) p=substr($0, RSTART, RLENGTH)+0; printf "Jasmine %s summary: %d passed, %d failed, %d pending (of %d specs)\n", SUITE, t-f-p, f, p, t }' SUITE=unit jasmine-unit.log
       - name: Run Spec Tests 👩🏽‍💻
-        run: npm run test:specs
+        run: |
+          set -o pipefail
+          npm run test:specs ${{ inputs.test-filter }} | tee jasmine-specs.log
+          awk '/^[0-9]+ specs?, [0-9]+ failures?/ { t=$1; f=$3; p=0; if (match($0, /[0-9]+ pending/)) p=substr($0, RSTART, RLENGTH)+0; printf "Jasmine %s summary: %d passed, %d failed, %d pending (of %d specs)\n", SUITE, t-f-p, f, p, t }' SUITE=specs jasmine-specs.log
 
   Lint:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -39,9 +49,8 @@ jobs:
 
   Release:
     needs: [Test, Lint]
-    if: |
-      github.ref == 'refs/heads/master' &&
-      github.event.repository.fork == false
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -56,14 +65,21 @@ jobs:
             git config --global user.name "MarkedJS bot"
             git commit -am "🗜️ build [skip ci]"
           fi
-      - name: Release 🎉
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npx semantic-release
+      - name: Pack 📦
+        run: |
+          mkdir -p dist-pack
+          npm pack --pack-destination dist-pack
+          ls -l dist-pack
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: marked-tgz
+          path: dist-pack/*.tgz
+          if-no-files-found: error
 
   Skip:
     if: contains(github.event.head_commit.message, '[skip ci]')
+    timeout-minutes: 5
     runs-on: ubuntu-latest
     steps:
       - name: Skip CI 🚫
